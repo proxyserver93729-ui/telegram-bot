@@ -1,275 +1,244 @@
 const TelegramBot = require('node-telegram-bot-api');
-const mongoose = require('mongoose');
 
-// 🔑 SETTINGS
-const token = "8696119704:AAHPDeefKq05KPMInNib3GibwvFrACkM9vs";
-const OWNER_ID = 8166370525;
-const MONGO_URL = "YOUR_MONGO_URL";
+const bot = new TelegramBot("8696119704:AAHPDeefKq05KPMInNib3GibwvFrACkM9vs", { polling: true });
+
+const ADMIN_PASSWORD = "abcd889911";
 const BOT_USERNAME = "free_reedeem_coad_gererator_bot";
 
-const bot = new TelegramBot(token, { polling: true });
-
-mongoose.connect(MONGO_URL);
-
-// 👤 USER MODEL
-const User = mongoose.model("User", new mongoose.Schema({
-  userId: Number,
-  balance: { default: 0, type: Number },
-  referred: { default: 0, type: Number },
-  lastBonus: { default: 0, type: Number }
-}));
-
-// 📢 CHANNEL MODEL
-const Channel = mongoose.model("Channel", new mongoose.Schema({
-  username: String
-}));
-
-// 🔘 MAIN MENU
-function mainMenu() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "👤 Profile", callback_data: "profile" }],
-        [{ text: "🎁 Bonus", callback_data: "bonus" }],
-        [{ text: "👥 Refer", callback_data: "refer" }],
-        [{ text: "💸 Withdraw", callback_data: "withdraw" }]
-      ]
-    }
-  };
-}
-
-// 👨‍💼 ADMIN MENU
-function adminMenu() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "👥 Users", callback_data: "users" }],
-        [{ text: "➕ Add Channel", callback_data: "add_ch" }],
-        [{ text: "❌ Delete Channel", callback_data: "del_ch" }],
-        [{ text: "📢 Broadcast", callback_data: "broadcast" }]
-      ]
-    }
-  };
-}
-
-// ✅ CHECK JOIN
-async function checkJoin(userId) {
-  let channels = await Channel.find();
-  for (let ch of channels) {
-    let res = await bot.getChatMember(ch.username, userId);
-    if (res.status == "left") return false;
-  }
-  return true;
-}
-
-// 🚀 START
-bot.onText(/\/start(.*)/, async (msg, match) => {
-  let userId = msg.from.id;
-  let ref = match[1].trim();
-
-  let user = await User.findOne({ userId });
-
-  if (!user) {
-    user = new User({ userId });
-
-    if (ref && ref != userId) {
-      let refUser = await User.findOne({ userId: ref });
-      if (refUser) {
-        refUser.balance += 10;
-        refUser.referred += 1;
-        await refUser.save();
-      }
-    }
-    await user.save();
-  }
-
-  let channels = await Channel.find();
-
-  let buttons = channels.map((ch, i) => [{
-    text: `Join Channel ${i + 1}✨`,
-    url: `https://t.me/${ch.username.replace("@","")}`
-  }]);
-
-  buttons.push([{ text: "✅ Joined (Verify)", callback_data: "verify" }]);
-
-  bot.sendMessage(userId,
-`🔥 Join All Channels And Click Verify`,
-{
-  reply_markup: { inline_keyboard: buttons }
-});
-});
-
-// 🎯 CALLBACK
-let adminStep = {};
+// MEMORY DATA (no DB)
+let users = {};
+let channels = [];
+let adminAccess = {};
+let userState = {};
+let withdrawRequests = [];
 let withdrawStep = {};
+let broadcastStep = {};
 
-bot.on("callback_query", async (q) => {
-  let userId = q.from.id;
+// START
+bot.onText(/\/start/, (msg) => {
+  let id = msg.from.id;
+
+  if (!users[id]) {
+    users[id] = {
+      balance: 0,
+      referrals: 0,
+      lastBonus: 0
+    };
+  }
+
+  let buttons = [];
+  let row = [];
+
+  channels.forEach((ch, i) => {
+    row.push({
+      text: `Channel ${i + 1}`,
+      url: `https://t.me/${ch.replace("@","")}`
+    });
+
+    if (row.length === 2) {
+      buttons.push(row);
+      row = [];
+    }
+  });
+
+  if (row.length > 0) buttons.push(row);
+
+  buttons.push([{ text: "✅ Verify", callback_data: "verify" }]);
+
+  bot.sendMessage(id, "🔒 Join all channels and click verify", {
+    reply_markup: { inline_keyboard: buttons }
+  });
+});
+
+// CALLBACK
+bot.on("callback_query", (q) => {
+  let id = q.from.id;
   let data = q.data;
 
-  let user = await User.findOne({ userId });
+  let user = users[id];
 
-  // VERIFY
   if (data === "verify") {
-    let joined = await checkJoin(userId);
-    if (!joined) return bot.answerCallbackQuery(q.id, { text: "Join all channels ❌" });
-
     bot.editMessageText("🎉 Welcome!", {
-      chat_id: userId,
+      chat_id: id,
       message_id: q.message.message_id,
-      reply_markup: mainMenu().reply_markup
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "👥 Refer", callback_data: "refer" },
+            { text: "💸 Withdraw", callback_data: "withdraw" }
+          ],
+          [
+            { text: "🎁 Bonus", callback_data: "bonus" },
+            { text: "👤 Profile", callback_data: "profile" }
+          ]
+        ]
+      }
     });
   }
 
-  // PROFILE
   if (data === "profile") {
-    bot.editMessageText(
+    bot.sendMessage(id,
 `👤 Profile
 
 💰 Balance: ${user.balance}
-👥 Referrals: ${user.referred}`, {
-      chat_id: userId,
-      message_id: q.message.message_id,
-      reply_markup: mainMenu().reply_markup
-    });
+👥 Referrals: ${user.referrals}`);
   }
 
-  // BONUS
-  if (data === "bonus") {
-    let now = Date.now();
-    if (now - user.lastBonus < 86400000) {
-      return bot.answerCallbackQuery(q.id, { text: "Already claimed" });
-    }
-
-    user.balance += 5;
-    user.lastBonus = now;
-    await user.save();
-
-    bot.answerCallbackQuery(q.id, { text: "+5 coins 🎁" });
-  }
-
-  // REFER
   if (data === "refer") {
-    bot.editMessageText(
+    bot.sendMessage(id,
 `👥 Refer & Earn
 
-https://t.me/${BOT_USERNAME}?start=${userId}`, {
-      chat_id: userId,
-      message_id: q.message.message_id,
-      reply_markup: mainMenu().reply_markup
-    });
+https://t.me/${BOT_USERNAME}?start=${id}`);
+  }
+
+  if (data === "bonus") {
+    let now = Date.now();
+
+    if (now - user.lastBonus < 86400000) {
+      return bot.sendMessage(id, "❌ Already claimed today");
+    }
+
+    user.balance += 0.5;
+    user.lastBonus = now;
+
+    bot.sendMessage(id, "🎁 ₹0.50 added");
+  }
+
+  if (data === "withdraw") {
+    withdrawStep[id] = {};
+    bot.sendMessage(id, "Enter amount:");
+  }
+
+  // ADMIN ACTIONS
+  if (adminAccess[id]) {
+
+    if (data === "add_ch") {
+      userState[id] = "add_channel";
+      bot.sendMessage(id, "Send channel @username");
+    }
+
+    if (data === "del_ch") {
+      let btns = channels.map((ch, i) => [{
+        text: ch,
+        callback_data: "del_" + i
+      }]);
+
+      bot.sendMessage(id, "Select channel to delete", {
+        reply_markup: { inline_keyboard: btns }
+      });
+    }
+
+    if (data.startsWith("del_")) {
+      let i = data.split("_")[1];
+      channels.splice(i, 1);
+      bot.sendMessage(id, "❌ Channel deleted");
+    }
+
+    if (data === "withdraw_requests") {
+      withdrawRequests.forEach((req, i) => {
+        bot.sendMessage(id,
+`Request #${i}
+
+User: ${req.userId}
+Amount: ${req.amount}
+UPI: ${req.upi}`, {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "✅ Approve", callback_data: "approve_" + i },
+                { text: "❌ Reject", callback_data: "reject_" + i }
+              ]
+            ]
+          }
+        });
+      });
+    }
+
+    if (data.startsWith("approve_")) {
+      let i = data.split("_")[1];
+      let req = withdrawRequests[i];
+
+      bot.sendMessage(req.userId, "✅ Withdraw Successful");
+      withdrawRequests.splice(i, 1);
+    }
+
+    if (data.startsWith("reject_")) {
+      let i = data.split("_")[1];
+      let req = withdrawRequests[i];
+
+      bot.sendMessage(req.userId, "❌ Withdraw Failed");
+      withdrawRequests.splice(i, 1);
+    }
+
+    if (data === "broadcast") {
+      broadcastStep[id] = true;
+      bot.sendMessage(id, "Send message/photo/video");
+    }
+  }
+});
+
+// MESSAGE
+bot.on("message", (msg) => {
+  let id = msg.from.id;
+  let text = msg.text;
+
+  // ADMIN LOGIN
+  if (text === "/admin") {
+    userState[id] = "pass";
+    return bot.sendMessage(id, "Enter password:");
+  }
+
+  if (userState[id] === "pass") {
+    if (text === ADMIN_PASSWORD) {
+      adminAccess[id] = true;
+      userState[id] = null;
+
+      return bot.sendMessage(id, "✅ Admin Access", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Add Channel", callback_data: "add_ch" }],
+            [{ text: "❌ Delete Channel", callback_data: "del_ch" }],
+            [{ text: "📢 Broadcast", callback_data: "broadcast" }],
+            [{ text: "💸 Withdraw Requests", callback_data: "withdraw_requests" }]
+          ]
+        }
+      });
+    } else {
+      return bot.sendMessage(id, "❌ Wrong password");
+    }
+  }
+
+  // ADD CHANNEL
+  if (userState[id] === "add_channel") {
+    channels.push(text);
+    userState[id] = null;
+    return bot.sendMessage(id, "✅ Channel added");
   }
 
   // WITHDRAW
-  if (data === "withdraw") {
-    withdrawStep[userId] = {};
-    bot.sendMessage(userId, "Enter Amount:");
-  }
+  if (withdrawStep[id] && !withdrawStep[id].amount) {
+    withdrawStep[id].amount = parseFloat(text);
+    return bot.sendMessage(id, "Enter UPI / Email:");
+  } else if (withdrawStep[id] && !withdrawStep[id].upi) {
+    withdrawStep[id].upi = text;
 
-  // ADMIN PANEL
-  if (data === "admin" && userId == OWNER_ID) {
-    bot.editMessageText("Admin Panel", {
-      chat_id: userId,
-      message_id: q.message.message_id,
-      reply_markup: adminMenu().reply_markup
+    withdrawRequests.push({
+      userId: id,
+      amount: withdrawStep[id].amount,
+      upi: text
     });
+
+    bot.sendMessage(id, "✅ Withdraw request sent");
+    delete withdrawStep[id];
   }
 
-  // USERS
-  if (data === "users" && userId == OWNER_ID) {
-    let count = await User.countDocuments();
-    bot.answerCallbackQuery(q.id, { text: `Users: ${count}` });
-  }
-
-  // ADD CHANNEL
-  if (data === "add_ch" && userId == OWNER_ID) {
-    adminStep[userId] = "add";
-    bot.sendMessage(userId, "Send channel @username");
-  }
-
-  // DELETE CHANNEL
-  if (data === "del_ch" && userId == OWNER_ID) {
-    let chs = await Channel.find();
-
-    let btns = chs.map(ch => [{
-      text: ch.username,
-      callback_data: "del_" + ch._id
-    }]);
-
-    bot.sendMessage(userId, "Select to delete", {
-      reply_markup: { inline_keyboard: btns }
+  // BROADCAST
+  if (broadcastStep[id]) {
+    Object.keys(users).forEach(uid => {
+      bot.copyMessage(uid, id, msg.message_id);
     });
+
+    broadcastStep[id] = false;
+    bot.sendMessage(id, "✅ Broadcast sent");
   }
-
-  // REMOVE CHANNEL
-  if (data.startsWith("del_") && userId == OWNER_ID) {
-    let id = data.split("_")[1];
-    await Channel.findByIdAndDelete(id);
-    bot.sendMessage(userId, "Deleted ❌");
-  }
-});
-
-// 💬 MESSAGE
-bot.on("message", async (msg) => {
-  let userId = msg.from.id;
-  let text = msg.text;
-
-  let user = await User.findOne({ userId });
-
-  // ADD CHANNEL
-  if (userId == OWNER_ID && adminStep[userId] === "add") {
-    await new Channel({ username: text }).save();
-    bot.sendMessage(userId, "Channel Added ✅");
-    adminStep[userId] = null;
-  }
-
-  // WITHDRAW FLOW
-  if (withdrawStep[userId] && !withdrawStep[userId].amount) {
-    withdrawStep[userId].amount = parseInt(text);
-    bot.sendMessage(userId, "Enter Email:");
-  } else if (withdrawStep[userId] && !withdrawStep[userId].email) {
-    withdrawStep[userId].email = text;
-
-    if (user.balance < withdrawStep[userId].amount) {
-      bot.sendMessage(userId, "❌ Not enough balance");
-      delete withdrawStep[userId];
-      return;
-    }
-
-    user.balance -= withdrawStep[userId].amount;
-    await user.save();
-
-    bot.sendMessage(OWNER_ID,
-`Withdraw Request
-
-User: ${userId}
-Amount: ${withdrawStep[userId].amount}
-Email: ${withdrawStep[userId].email}`);
-
-    bot.sendMessage(userId, "Request Sent ✅");
-
-    delete withdrawStep[userId];
-  }
-});
-
-// 📢 BROADCAST
-bot.onText(/\/broadcast (.+)/, async (msg, match) => {
-  if (msg.from.id != OWNER_ID) return;
-
-  let text = match[1];
-  let users = await User.find();
-
-  users.forEach(u => {
-    bot.sendMessage(u.userId, text);
-  });
-
-  bot.sendMessage(msg.chat.id, "Sent ✅");
-});
-
-// 🎁 SEND REDEEM CODE
-bot.onText(/\/send (.+)/, (msg, match) => {
-  if (msg.from.id != OWNER_ID) return;
-
-  let [id, code] = match[1].split(" ");
-  bot.sendMessage(id, `🎁 Your Redeem Code:\n${code}`);
 });
