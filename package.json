@@ -1,8 +1,14 @@
 {
-  "name": "bot",
+  "name": "free-redeem-bot",
   "version": "1.0.0",
+  "description": "Telegram Refer and Earn Bot with Admin Panel",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Rohith",
+  "license": "ISC",
   "dependencies": {
-    "node-telegram-bot-api": "^0.61.0",
-    "mongoose": "^7.0.0"
+    "node-telegram-bot-api": "^0.61.0"
   }
 }
