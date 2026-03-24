@@ -2,10 +2,10 @@ const TelegramBot = require('node-telegram-bot-api');
 const mongoose = require('mongoose');
 
 // 🔑 SETTINGS
-const token = "YOUR_BOT_TOKEN";
-const OWNER_ID = 123456789;
+const token = "8696119704:AAHPDeefKq05KPMInNib3GibwvFrACkM9vs";
+const OWNER_ID = 8166370525;
 const MONGO_URL = "YOUR_MONGO_URL";
-const BOT_USERNAME = "YOUR_BOT_USERNAME";
+const BOT_USERNAME = "free_reedeem_coad_gererator_bot";
 
 const bot = new TelegramBot(token, { polling: true });
 
